@@ -26,11 +26,11 @@ const CACHE_CONFIG = {
     MAX_FAIL_COUNT: 10,
 
     // 重试配置
-    MAX_RETRIES: 3,           // 最大重试次数
+    MAX_RETRIES: 5,           // 最大重试次数
     RETRY_DELAY: 1000,        // 重试延迟（毫秒）
 };
 
-// 代理工具User-Agent列表，用于重试时轮换
+// User-Agent列表，用于重试时轮换
 const USER_AGENTS = [
     'curl/7.88.1',
     'wget/1.21.3',
@@ -41,7 +41,44 @@ const USER_AGENTS = [
     'SagerNet/0.7.10',
     'Qv2ray/2.7.0',
     'shadowsocks-windows/4.3.3.0',
-    'shadowrocket/2.1.65'
+    'shadowrocket/2.1.65',
+    // 浏览器类User-Agent，某些服务器可能允许
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    // 空User-Agent或通用客户端
+    '',
+    'SublinkWorker/1.0',
+    'Subscription-Client/1.0'
+];
+
+// Referer列表，用于某些需要Referer的订阅服务
+const REFERERS = [
+    '',
+    'https://www.google.com/',
+    'https://www.baidu.com/',
+    'https://client.yieldkit.com/',
+    'https://sublink-worker.github.io/'
+];
+
+// 自定义headers组合，用于绕过更严格的检查
+const HEADER_COMBINATIONS = [
+    {}, // 最小headers
+    {
+        'Accept': '*/*',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive'
+    },
+    {
+        'Accept': 'text/plain, */*; q=0.01',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache'
+    },
+    {
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Pragma': 'no-cache'
+    }
 ];
 
 /**
@@ -217,16 +254,34 @@ export class SubscriptionCacheManager {
     async fetchWithRetry(url, fetchOptions = {}, userAgents = USER_AGENTS) {
         let lastError = null;
 
-        console.log(`开始重试下载: ${url}, 最大重试次数: ${CACHE_CONFIG.MAX_RETRIES}`);
+        console.log(`开始增强重试下载: ${url}, 最大重试次数: ${CACHE_CONFIG.MAX_RETRIES}`);
 
         for (let attempt = 0; attempt < CACHE_CONFIG.MAX_RETRIES; attempt++) {
             try {
-                // 选择User-Agent
+                // 计算各种组合
                 const userAgent = userAgents[attempt % userAgents.length];
+                const referer = REFERERS[attempt % REFERERS.length];
+                const headerCombo = HEADER_COMBINATIONS[attempt % HEADER_COMBINATIONS.length];
 
-                // 合并原始headers和新的User-Agent
+                // 合并所有headers
                 const mergedHeaders = new Headers(fetchOptions.headers || {});
-                mergedHeaders.set('User-Agent', userAgent);
+
+                // 设置User-Agent
+                if (userAgent) {
+                    mergedHeaders.set('User-Agent', userAgent);
+                } else {
+                    mergedHeaders.delete('User-Agent');
+                }
+
+                // 设置Referer
+                if (referer) {
+                    mergedHeaders.set('Referer', referer);
+                }
+
+                // 添加额外headers
+                Object.entries(headerCombo).forEach(([key, value]) => {
+                    mergedHeaders.set(key, value);
+                });
 
                 const safeOptions = {
                     method: 'GET',
@@ -234,16 +289,17 @@ export class SubscriptionCacheManager {
                     signal: AbortSignal.timeout(30000) // 30秒超时
                 };
 
-                console.log(`尝试下载 (第${attempt + 1}次): ${url}, User-Agent: ${userAgent}`);
+                console.log(`尝试下载 (第${attempt + 1}次): ${url}`);
+                console.log(`  User-Agent: ${userAgent || '(空)'}`);
+                console.log(`  Referer: ${referer || '(空)'}`);
+                console.log(`  额外Headers: ${Object.keys(headerCombo).join(', ') || '(无)'}`);
 
                 const response = await fetch(url, safeOptions);
 
                 if (response.ok) {
                     const content = await response.text();
 
-                    if (process.env.NODE_ENV !== 'production') {
-                        console.log(`下载成功 (第${attempt + 1}次): ${url}, 内容长度: ${content.length}`);
-                    }
+                    console.log(`✅ 下载成功 (第${attempt + 1}次): ${url}, 内容长度: ${content.length}`);
 
                     return content;
                 } else {
@@ -252,13 +308,13 @@ export class SubscriptionCacheManager {
             } catch (error) {
                 lastError = error;
 
-                if (process.env.NODE_ENV !== 'production') {
-                    console.warn(`下载失败 (第${attempt + 1}次): ${url}, 错误: ${error.message}`);
-                }
+                console.warn(`❌ 下载失败 (第${attempt + 1}次): ${url}, 错误: ${error.message}`);
 
                 // 如果不是最后一次尝试，等待一下再重试
                 if (attempt < CACHE_CONFIG.MAX_RETRIES - 1) {
-                    await new Promise(resolve => setTimeout(resolve, CACHE_CONFIG.RETRY_DELAY));
+                    const delay = CACHE_CONFIG.RETRY_DELAY * (attempt + 1); // 递增延迟
+                    console.log(`⏳ 等待 ${delay}ms 后进行下次重试...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
                 }
             }
         }
