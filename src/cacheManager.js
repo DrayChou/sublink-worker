@@ -210,28 +210,31 @@ export class SubscriptionCacheManager {
     /**
      * 带重试机制的fetch操作
      * @param {string} url - 订阅URL
+     * @param {Object} fetchOptions - 原始fetch选项
      * @param {Array<string>} userAgents - User-Agent列表
      * @returns {Promise<string>} 下载的内容
      */
-    async fetchWithRetry(url, userAgents = USER_AGENTS) {
+    async fetchWithRetry(url, fetchOptions = {}, userAgents = USER_AGENTS) {
         let lastError = null;
+
+        console.log(`开始重试下载: ${url}, 最大重试次数: ${CACHE_CONFIG.MAX_RETRIES}`);
 
         for (let attempt = 0; attempt < CACHE_CONFIG.MAX_RETRIES; attempt++) {
             try {
                 // 选择User-Agent
                 const userAgent = userAgents[attempt % userAgents.length];
 
+                // 合并原始headers和新的User-Agent
+                const mergedHeaders = new Headers(fetchOptions.headers || {});
+                mergedHeaders.set('User-Agent', userAgent);
+
                 const safeOptions = {
                     method: 'GET',
-                    headers: {
-                        'User-Agent': userAgent
-                    },
+                    headers: mergedHeaders,
                     signal: AbortSignal.timeout(30000) // 30秒超时
                 };
 
-                if (process.env.NODE_ENV !== 'production') {
-                    console.log(`尝试下载 (第${attempt + 1}次): ${url}, User-Agent: ${userAgent}`);
-                }
+                console.log(`尝试下载 (第${attempt + 1}次): ${url}, User-Agent: ${userAgent}`);
 
                 const response = await fetch(url, safeOptions);
 
@@ -276,7 +279,7 @@ export class SubscriptionCacheManager {
 
         // 首先尝试实时下载（带重试机制）
         try {
-            const content = await this.fetchWithRetry(url);
+            const content = await this.fetchWithRetry(url, fetchOptions);
 
             // 更新缓存
             await this.updateCache(cacheKey, content, cached);

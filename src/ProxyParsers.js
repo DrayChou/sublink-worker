@@ -593,7 +593,6 @@ export class ProxyParser {
 
                 // 使用带缓存的fetch，提高可用性
                 const text = await fetchWithSubscriptionCache(url, {
-                    method: 'GET',
                     headers: headers
                 });
                 let decodedText;
