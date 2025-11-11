@@ -32,16 +32,22 @@ const CACHE_CONFIG = {
 
 // User-Agent列表，用于重试时轮换
 const USER_AGENTS = [
+    // 命令行工具
     'curl/7.88.1',
     'wget/1.21.3',
+    // 真实客户端工具（来自实际请求）
+    'FlClash/v0.8.74 clash-verge Platform/windows',
     'ClashforWindows/0.20.31',
     'ClashforAndroid/2.5.12',
     'ClashX/1.112.0',
+    'clash-verge/v1.7.4',
+    // V2Ray客户端
     'v2rayN/5.44',
     'SagerNet/0.7.10',
     'Qv2ray/2.7.0',
+    'Shadowrocket/2.1.65',
     'shadowsocks-windows/4.3.3.0',
-    'shadowrocket/2.1.65',
+    'ShadowsocksX-NG/1.8.2',
     // 浏览器类User-Agent，某些服务器可能允许
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -49,7 +55,8 @@ const USER_AGENTS = [
     // 空User-Agent或通用客户端
     '',
     'SublinkWorker/1.0',
-    'Subscription-Client/1.0'
+    'Subscription-Client/1.0',
+    'Universal-Client/1.0'
 ];
 
 // Referer列表，用于某些需要Referer的订阅服务
@@ -65,19 +72,39 @@ const REFERERS = [
 const HEADER_COMBINATIONS = [
     {}, // 最小headers
     {
-        'Accept': '*/*',
-        'Accept-Encoding': 'gzip, deflate',
-        'Connection': 'keep-alive'
+        'accept-encoding': 'gzip, br',
+        'connection': 'Keep-Alive',
+        'user-agent': 'FlClash/v0.8.74 clash-verge Platform/windows',
+        'x-forwarded-proto': 'https',
+        'x-real-ip': '47.91.20.160'
     },
     {
-        'Accept': 'text/plain, */*; q=0.01',
+        'accept-encoding': 'gzip, deflate',
+        'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
+        'Connection': 'keep-alive',
         'Cache-Control': 'no-cache'
     },
     {
+        'accept-encoding': 'gzip, br',
+        'Accept': 'text/plain, */*; q=0.01',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Connection': 'Keep-Alive',
+        'Pragma': 'no-cache'
+    },
+    {
+        'accept-encoding': 'gzip, deflate',
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        'Pragma': 'no-cache'
+        'Connection': 'Keep-Alive',
+        'x-forwarded-proto': 'https'
+    },
+    {
+        'accept-encoding': 'gzip, br',
+        'Connection': 'Keep-Alive',
+        'Accept': '*/*',
+        'x-forwarded-proto': 'https',
+        'x-real-ip': '47.91.20.160'
     }
 ];
 
@@ -266,10 +293,10 @@ export class SubscriptionCacheManager {
                 // 合并所有headers
                 const mergedHeaders = new Headers(fetchOptions.headers || {});
 
-                // 设置User-Agent
-                if (userAgent) {
+                // 设置User-Agent（避免与headerCombo中的重复）
+                if (userAgent && !headerCombo['user-agent']) {
                     mergedHeaders.set('User-Agent', userAgent);
-                } else {
+                } else if (!userAgent) {
                     mergedHeaders.delete('User-Agent');
                 }
 
