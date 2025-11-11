@@ -1,4 +1,5 @@
 import { parseServerInfo, parseUrlParams, createTlsConfig, createTransportConfig, decodeBase64, base64ToBinary, DeepCopy, parseBool, parseMaybeNumber, parseArray } from './utils.js';
+import { fetchWithSubscriptionCache } from './cacheManager.js';
 import yaml from 'js-yaml';
 
 // Shared: convert a Clash YAML proxy entry to internal proxy object
@@ -589,14 +590,12 @@ export class ProxyParser {
                 let headers = new Headers({
                   "User-Agent"   : userAgent
                 });
-                const response = await fetch(url, {
-                  method : 'GET',
-                  headers : headers
+
+                // 使用带缓存的fetch，提高可用性
+                const text = await fetchWithSubscriptionCache(url, {
+                    method: 'GET',
+                    headers: headers
                 });
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                const text = await response.text();
                 let decodedText;
                 try {
                     decodedText = decodeBase64(text.trim());

@@ -5,6 +5,7 @@ import { SurgeConfigBuilder } from './SurgeConfigBuilder.js';
 import { encodeBase64, GenerateWebPath, tryDecodeSubscriptionLines } from './utils.js';
 import { PREDEFINED_RULE_SETS } from './config.js';
 import { t, setLanguage } from './i18n/index.js';
+import { initCacheManager, getCacheManager } from './cacheManager.js';
 import yaml from 'js-yaml';
 
 addEventListener('fetch', event => {
@@ -13,6 +14,9 @@ addEventListener('fetch', event => {
 
 async function handleRequest(request) {
   try {
+    // 初始化缓存管理器
+    initCacheManager(SUBLINK_KV);
+
     const url = new URL(request.url);
     const lang = url.searchParams.get('lang');
     setLanguage(lang || request.headers.get('accept-language')?.split(',')[0]);
@@ -295,6 +299,49 @@ async function handleRequest(request) {
         });
       } catch (error) {
         return new Response(t('invalidShortUrl'), { status: 400 });
+      }
+    }
+
+    // 缓存管理接口
+    if (url.pathname === '/cache-stats') {
+      const targetUrl = url.searchParams.get('url');
+      if (!targetUrl) {
+        return new Response(t('missingUrl'), { status: 400 });
+      }
+
+      try {
+        const cacheManager = getCacheManager();
+        const stats = await cacheManager.getCacheStats(targetUrl);
+
+        if (!stats) {
+          return new Response(JSON.stringify({
+            error: 'No cache found for the specified URL',
+            url: targetUrl
+          }), {
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        return new Response(JSON.stringify({
+          url: targetUrl,
+          cacheStats: stats,
+          formatted: {
+            cacheAge: `${Math.round(stats.cacheAge / 1000)}s ago`,
+            successRate: `${(stats.successRate * 100).toFixed(1)}%`,
+            lastSuccess: new Date(stats.lastSuccess).toISOString()
+          }
+        }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('Error getting cache stats:', error);
+        return new Response(JSON.stringify({
+          error: 'Failed to get cache stats',
+          message: error.message
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
       }
     }
 

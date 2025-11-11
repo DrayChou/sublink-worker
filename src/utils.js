@@ -318,3 +318,27 @@ export function parseCountryFromNodeName(nodeName) {
 
 	return null;
 }
+
+/**
+ * 简单的字符串哈希函数（使用FNV-1a算法）
+ * @param {string} str - 要哈希的字符串
+ * @returns {string} 16进制哈希值
+ */
+export function hashString(str) {
+	if (!str || typeof str !== 'string') {
+		return '0';
+	}
+
+	// FNV-1a 32位哈希算法
+	let hash = 2166136261; // FNV offset basis
+
+	for (let i = 0; i < str.length; i++) {
+		hash ^= str.charCodeAt(i);
+		// FNV prime
+		hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+	}
+
+	// 转换为16进制字符串，添加长度前缀减少冲突概率
+	const hashHex = (hash >>> 0).toString(16);
+	return `${hashHex}_${str.length}`;
+}
