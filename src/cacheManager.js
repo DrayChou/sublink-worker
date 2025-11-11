@@ -24,7 +24,25 @@ const CACHE_CONFIG = {
 
     // 最大失败次数
     MAX_FAIL_COUNT: 10,
+
+    // 重试配置
+    MAX_RETRIES: 3,           // 最大重试次数
+    RETRY_DELAY: 1000,        // 重试延迟（毫秒）
 };
+
+// 代理工具User-Agent列表，用于重试时轮换
+const USER_AGENTS = [
+    'curl/7.88.1',
+    'wget/1.21.3',
+    'ClashforWindows/0.20.31',
+    'ClashforAndroid/2.5.12',
+    'ClashX/1.112.0',
+    'v2rayN/5.44',
+    'SagerNet/0.7.10',
+    'Qv2ray/2.7.0',
+    'shadowsocks-windows/4.3.3.0',
+    'shadowrocket/2.1.65'
+];
 
 /**
  * 缓存数据结构
@@ -190,6 +208,63 @@ export class SubscriptionCacheManager {
     }
 
     /**
+     * 带重试机制的fetch操作
+     * @param {string} url - 订阅URL
+     * @param {Array<string>} userAgents - User-Agent列表
+     * @returns {Promise<string>} 下载的内容
+     */
+    async fetchWithRetry(url, userAgents = USER_AGENTS) {
+        let lastError = null;
+
+        for (let attempt = 0; attempt < CACHE_CONFIG.MAX_RETRIES; attempt++) {
+            try {
+                // 选择User-Agent
+                const userAgent = userAgents[attempt % userAgents.length];
+
+                const safeOptions = {
+                    method: 'GET',
+                    headers: {
+                        'User-Agent': userAgent
+                    },
+                    signal: AbortSignal.timeout(30000) // 30秒超时
+                };
+
+                if (process.env.NODE_ENV !== 'production') {
+                    console.log(`尝试下载 (第${attempt + 1}次): ${url}, User-Agent: ${userAgent}`);
+                }
+
+                const response = await fetch(url, safeOptions);
+
+                if (response.ok) {
+                    const content = await response.text();
+
+                    if (process.env.NODE_ENV !== 'production') {
+                        console.log(`下载成功 (第${attempt + 1}次): ${url}, 内容长度: ${content.length}`);
+                    }
+
+                    return content;
+                } else {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+            } catch (error) {
+                lastError = error;
+
+                if (process.env.NODE_ENV !== 'production') {
+                    console.warn(`下载失败 (第${attempt + 1}次): ${url}, 错误: ${error.message}`);
+                }
+
+                // 如果不是最后一次尝试，等待一下再重试
+                if (attempt < CACHE_CONFIG.MAX_RETRIES - 1) {
+                    await new Promise(resolve => setTimeout(resolve, CACHE_CONFIG.RETRY_DELAY));
+                }
+            }
+        }
+
+        // 所有重试都失败了
+        throw lastError || new Error(`所有重试都失败: ${url}`);
+    }
+
+    /**
      * 带缓存的fetch操作
      * @param {string} url - 订阅URL
      * @param {Object} fetchOptions - fetch选项
@@ -199,28 +274,18 @@ export class SubscriptionCacheManager {
         const cacheKey = this.generateCacheKey(url);
         const cached = await this.getCache(url);
 
-        // 安全的fetch选项白名单
-        const safeOptions = {
-            method: 'GET',
-            headers: fetchOptions.headers || {},
-            signal: AbortSignal.timeout(30000) // 30秒超时
-        };
-
-        // 首先尝试实时下载
+        // 首先尝试实时下载（带重试机制）
         try {
-            const response = await fetch(url, safeOptions);
+            const content = await this.fetchWithRetry(url);
 
-            if (response.ok) {
-                const content = await response.text();
+            // 更新缓存
+            await this.updateCache(cacheKey, content, cached);
 
-                // 更新缓存
-                await this.updateCache(cacheKey, content, cached);
-
+            if (process.env.NODE_ENV !== 'production') {
                 console.log(`实时下载成功: ${url}, 内容长度: ${content.length}`);
-                return content;
-            } else {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
+
+            return content;
         } catch (error) {
             if (process.env.NODE_ENV !== 'production') {
                 console.warn(`实时下载失败: ${url}, 错误: ${error.message}`);
