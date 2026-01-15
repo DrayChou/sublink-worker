@@ -17,14 +17,19 @@ export default {
 
       // Initialize D1 table on first request
       if (!env._dbInitialized) {
-        await initDatabase(env);
-        env._dbInitialized = true;
+        try {
+          await initDatabase(env);
+          env._dbInitialized = true;
+        } catch (initError) {
+          console.warn('D1 init skipped (may already exist):', initError.message);
+          env._dbInitialized = true;
+        }
       }
 
       return await handleRequest(request, env);
     } catch (error) {
       console.error('Error processing request:', error);
-      return new Response(t('internalError'), { status: 500 });
+      return new Response('Internal Error: ' + error.message, { status: 500 });
     }
   }
 };
@@ -98,7 +103,13 @@ async function handleRequest(request, env) {
         .setSubscriptionUrl(url.href);
     }
 
-    const config = await configBuilder.build();
+    let config;
+    try {
+      config = await configBuilder.build();
+    } catch (buildError) {
+      console.error('Build error:', buildError);
+      return new Response('Build failed: ' + buildError.message, { status: 500 });
+    }
 
     // 设置正确的 Content-Type 和其他响应头
     const headers = {
