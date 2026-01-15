@@ -102,6 +102,17 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3) {
                         headers.set(key, value);
                     }
                 }
+                // Add dynamic Referer based on URL to bypass 403
+                try {
+                    const urlObj = new URL(url);
+                    headers.set('referer', `${urlObj.protocol}//${urlObj.host}/`);
+                } catch (e) {
+                    // Invalid URL, skip referer
+                }
+                // Add Accept header for subscription content
+                if (!headers.has('accept')) {
+                    headers.set('accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
+                }
             }
 
             const response = await fetch(url, {
@@ -347,7 +358,11 @@ export async function initDatabase(env) {
             console.warn('D1 db.exec is not a function, skipping init');
             return false;
         }
-        await db.exec(CREATE_TABLE_SQL);
+        // Execute without accessing result properties (D1 may return incomplete objects)
+        await db.exec(CREATE_TABLE_SQL).catch(e => {
+            // Ignore result processing errors
+            if (!e.message?.includes('duration')) throw e;
+        });
         dbInitialized = true;
         console.log('D1 subscription_cache table initialized');
         return true;
