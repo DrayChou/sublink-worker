@@ -13,3 +13,7 @@ kv_namespaces = [
 binding = "SUBSCRIPTION_DB"
 database_name = "subscription-db"
 database_id = "3292c97a-9d2f-40a3-bad9-cab00b460061"
+
+# Enable logging for debugging
+[observability]
+logs = { enabled = true, invocation_logs = true }
