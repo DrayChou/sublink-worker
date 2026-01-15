@@ -65,11 +65,14 @@ const USER_AGENTS = [
 
 // Generate cache key for URL (simple hash)
 export function generateCacheKey(url) {
+    if (!url || typeof url !== 'string') {
+        return 'invalid-url';
+    }
     const encoder = new TextEncoder();
     const data = encoder.encode(url);
     let hash = 0;
     for (let i = 0; i < data.length; i++) {
-        const char = data.charCodeAt(i);
+        const char = data[i];  // Uint8Array uses array access, not charCodeAt
         hash = ((hash << 5) - hash) + char;
         hash = hash & hash;
     }
@@ -125,7 +128,6 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3) {
 export async function getCachedContent(cacheKey) {
     const db = getDb();
     if (!db) {
-        console.warn('D1 database not initialized');
         return null;
     }
 
@@ -146,7 +148,8 @@ export async function getCachedContent(cacheKey) {
             };
         }
     } catch (error) {
-        console.error(`Error reading cache from D1 for ${cacheKey}:`, error);
+        // Table might not exist yet, or other D1 errors - don't fail the request
+        console.warn(`D1 read error for ${cacheKey}:`, error.message);
     }
     return null;
 }
@@ -339,12 +342,23 @@ export async function initDatabase(env) {
     }
 
     try {
+        // Check if db is valid before executing
+        if (typeof db.exec !== 'function') {
+            console.warn('D1 db.exec is not a function, skipping init');
+            return false;
+        }
         await db.exec(CREATE_TABLE_SQL);
         dbInitialized = true;
         console.log('D1 subscription_cache table initialized');
         return true;
     } catch (error) {
-        console.error('Failed to initialize D1 database:', error);
+        // Table might already exist, which is fine
+        if (error.message && error.message.includes('already exists')) {
+            dbInitialized = true;
+            console.log('D1 table already exists');
+            return true;
+        }
+        console.warn('Failed to initialize D1 database (non-fatal):', error.message);
         return false;
     }
 }
