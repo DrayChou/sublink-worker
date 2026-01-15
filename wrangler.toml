@@ -9,8 +9,8 @@ kv_namespaces = [
 ]
 
 # D1 Database for subscription caching
-# Create with: npx wrangler d1 create subscription-db
+# Created via Cloudflare Dashboard
 [[d1_databases]]
 binding = "SUBSCRIPTION_DB"
 database_name = "subscription-db"
-database_id = "YOUR_D1_DATABASE_ID_HERE"
+database_id = "3292c97a-9d2f-40a3-bad9-cab00b460061"
