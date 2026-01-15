@@ -600,11 +600,12 @@ export class ProxyParser {
                     });
 
                     if (!result.success) {
-                        if (result.warning) {
+                        if (result.warning && result.content) {
+                            // Cache fallback with content - use it but warn
                             warning = result.warning;
                             console.warn(result.warning);
                         } else {
-                            throw new Error(`Download failed: ${result.error}`);
+                            throw new Error(`Download failed: ${result.error || 'No content available'}`);
                         }
                     }
 

@@ -178,10 +178,10 @@ export async function saveToCache(cacheKey, url, content) {
             ))
         `).bind(cacheKey, url, content, now, now, cacheKey, cacheKey).run();
 
-        console.log(`Cached ${cacheKey}, url: ${url.substring(0, 50)}...`);
+        console.log(`Cached ${cacheKey}, url: ${(url || '').substring(0, 50)}...`);
         return true;
     } catch (error) {
-        console.error(`Error saving cache to D1 for ${cacheKey}:`, error);
+        console.error(`Error saving cache to D1 for ${cacheKey}:`, error.message);
         return false;
     }
 }
@@ -201,7 +201,7 @@ export async function recordFailAttempt(cacheKey) {
         `).bind(Date.now(), cacheKey).run();
         return true;
     } catch (error) {
-        console.error(`Error recording fail for ${cacheKey}:`, error);
+        console.error(`Error recording fail for ${cacheKey}:`, error.message);
         return false;
     }
 }
@@ -220,7 +220,7 @@ export async function clearCache(cacheKey) {
         console.log(`Cache cleared for ${cacheKey}`);
         return true;
     } catch (error) {
-        console.error(`Error clearing cache for ${cacheKey}:`, error);
+        console.error(`Error clearing cache for ${cacheKey}:`, error.message);
         return false;
     }
 }
@@ -262,7 +262,7 @@ export async function clearAllCache() {
         console.log('All cache cleared');
         return true;
     } catch (error) {
-        console.error('Error clearing all cache:', error);
+        console.error('Error clearing all cache:', error.message);
         return false;
     }
 }
@@ -310,7 +310,7 @@ export async function fetchWithCache(url, options = {}) {
             content: null,
             fromCache: false,
             success: false,
-            error: error.message
+            error: error?.message || 'Unknown error'
         };
     }
 }
