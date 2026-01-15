@@ -175,3 +175,6 @@ test
 .editorconfig
 .prettierrc
 package-lock.json
+
+.lh
+.DS_Store
