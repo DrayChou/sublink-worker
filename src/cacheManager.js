@@ -139,6 +139,7 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3) {
 export async function getCachedContent(cacheKey) {
     const db = getDb();
     if (!db) {
+        console.warn(`D1 db is null for cache key ${cacheKey}, SUBSCRIPTION_DB binding may be missing`);
         return null;
     }
 
@@ -158,9 +159,10 @@ export async function getCachedContent(cacheKey) {
                 createdAt: result.created_at
             };
         }
+        console.log(`Cache miss for ${cacheKey}, no entry found in D1`);
     } catch (error) {
         // Table might not exist yet, or other D1 errors - don't fail the request
-        console.warn(`D1 read error for ${cacheKey}:`, error.message);
+        console.warn(`D1 read error for ${cacheKey}:`, error.message, error.stack);
     }
     return null;
 }
