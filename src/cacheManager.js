@@ -10,6 +10,21 @@
  * - Cache never expires (until manually cleared)
  */
 
+// Global reference to D1 binding (set from env in ES Module format)
+let dbBinding = null;
+
+// Set the D1 binding from env
+export function setDbBinding(env) {
+    if (env && env.SUBSCRIPTION_DB) {
+        dbBinding = env.SUBSCRIPTION_DB;
+    }
+}
+
+// Get the D1 binding
+function getDb() {
+    return dbBinding;
+}
+
 // User-Agent pool for retry mechanism
 const USER_AGENTS = [
     // Real client headers from actual requests
@@ -108,13 +123,14 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3) {
 
 // Get cached content from D1
 export async function getCachedContent(cacheKey) {
-    if (!SUBSCRIPTION_DB) {
+    const db = getDb();
+    if (!db) {
         console.warn('D1 database not initialized');
         return null;
     }
 
     try {
-        const result = await SUBSCRIPTION_DB.prepare(`
+        const result = await db.prepare(`
             SELECT content, success_count, fail_count, created_at
             FROM subscription_cache
             WHERE cache_key = ?
@@ -137,7 +153,8 @@ export async function getCachedContent(cacheKey) {
 
 // Save content to D1 cache (only on success)
 export async function saveToCache(cacheKey, url, content) {
-    if (!SUBSCRIPTION_DB) {
+    const db = getDb();
+    if (!db) {
         console.warn('D1 database not initialized');
         return false;
     }
@@ -146,7 +163,7 @@ export async function saveToCache(cacheKey, url, content) {
         const now = Date.now();
 
         // Use INSERT OR REPLACE to update existing or insert new
-        await SUBSCRIPTION_DB.prepare(`
+        await db.prepare(`
             INSERT OR REPLACE INTO subscription_cache
             (cache_key, url, content, created_at, updated_at, success_count, fail_count)
             VALUES (?, ?, ?, ?, ?, COALESCE(
@@ -168,12 +185,13 @@ export async function saveToCache(cacheKey, url, content) {
 
 // Record a failed fetch attempt
 export async function recordFailAttempt(cacheKey) {
-    if (!SUBSCRIPTION_DB) {
+    const db = getDb();
+    if (!db) {
         return false;
     }
 
     try {
-        await SUBSCRIPTION_DB.prepare(`
+        await db.prepare(`
             UPDATE subscription_cache
             SET fail_count = fail_count + 1, updated_at = ?
             WHERE cache_key = ?
@@ -187,12 +205,13 @@ export async function recordFailAttempt(cacheKey) {
 
 // Clear cache for a specific URL
 export async function clearCache(cacheKey) {
-    if (!SUBSCRIPTION_DB) {
+    const db = getDb();
+    if (!db) {
         return false;
     }
 
     try {
-        await SUBSCRIPTION_DB.prepare(`
+        await db.prepare(`
             DELETE FROM subscription_cache WHERE cache_key = ?
         `).bind(cacheKey).run();
         console.log(`Cache cleared for ${cacheKey}`);
@@ -205,16 +224,17 @@ export async function clearCache(cacheKey) {
 
 // Get cache statistics
 export async function getCacheStats() {
-    if (!SUBSCRIPTION_DB) {
+    const db = getDb();
+    if (!db) {
         return { error: 'D1 database not initialized' };
     }
 
     try {
-        const total = await SUBSCRIPTION_DB.prepare(`
+        const total = await db.prepare(`
             SELECT COUNT(*) as count FROM subscription_cache
         `).first();
 
-        const withSuccess = await SUBSCRIPTION_DB.prepare(`
+        const withSuccess = await db.prepare(`
             SELECT COUNT(*) as count FROM subscription_cache WHERE success_count > 0
         `).first();
 
@@ -229,12 +249,13 @@ export async function getCacheStats() {
 
 // Clear all cache
 export async function clearAllCache() {
-    if (!SUBSCRIPTION_DB) {
+    const db = getDb();
+    if (!db) {
         return false;
     }
 
     try {
-        await SUBSCRIPTION_DB.prepare(`DELETE FROM subscription_cache`).run();
+        await db.prepare(`DELETE FROM subscription_cache`).run();
         console.log('All cache cleared');
         return true;
     } catch (error) {
@@ -306,13 +327,19 @@ const CREATE_TABLE_SQL = `
 
 // Auto-initialize D1 database schema
 let dbInitialized = false;
-export async function initDatabase() {
-    if (dbInitialized || !SUBSCRIPTION_DB) {
+export async function initDatabase(env) {
+    // Set the D1 binding from env if provided
+    if (env && env.SUBSCRIPTION_DB) {
+        setDbBinding(env);
+    }
+
+    const db = getDb();
+    if (dbInitialized || !db) {
         return dbInitialized;
     }
 
     try {
-        await SUBSCRIPTION_DB.exec(CREATE_TABLE_SQL);
+        await db.exec(CREATE_TABLE_SQL);
         dbInitialized = true;
         console.log('D1 subscription_cache table initialized');
         return true;
@@ -332,5 +359,6 @@ export default {
     clearAllCache,
     recordFailAttempt,
     getCacheStats,
-    initDatabase
+    initDatabase,
+    setDbBinding
 };
