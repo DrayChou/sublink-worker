@@ -28,11 +28,12 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
-          echo "Applying D1 migration to create subscription_cache table..."
-          npx wrangler d1 execute subscription-db --remote --file=migrations/0001_create_subscription_cache.sql --yes 2>&1 || echo "Table may already exist"
+          echo "=== Applying D1 Migration ==="
+          npx wrangler d1 execute subscription-db --remote --file=migrations/0001_create_subscription_cache.sql --yes
 
       - name: Deploy to Cloudflare Workers
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          command: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          echo "=== Deploying Worker ==="
+          npx wrangler deploy
