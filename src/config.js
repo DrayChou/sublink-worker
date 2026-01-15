@@ -192,6 +192,7 @@ export function generateRules(selectedRules = [], customRules = []) {
 	  }
 	});
   
+	customRules = customRules || [];
 	customRules.reverse();
 	customRules.forEach((rule) => {
 		rules.unshift({
