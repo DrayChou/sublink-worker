@@ -7,3 +7,10 @@ compatibility_flags = ["nodejs_compat"]
 kv_namespaces = [
   { binding = "SUBLINK_KV", id = "8943789ed0af49659f887fc740d11240" }
 ]
+
+# D1 Database for subscription caching
+# Create with: npx wrangler d1 create subscription-db
+[[d1_databases]]
+binding = "SUBSCRIPTION_DB"
+database_name = "subscription-db"
+database_id = "YOUR_D1_DATABASE_ID_HERE"

@@ -5,7 +5,7 @@ import { t, setLanguage } from './i18n/index.js';
 import { generateRules, getOutbounds, PREDEFINED_RULE_SETS } from './config.js';
 
 export class BaseConfigBuilder {
-    constructor(inputString, baseConfig, lang, userAgent, groupByCountry = false) {
+    constructor(inputString, baseConfig, lang, userAgent, groupByCountry = false, cacheEnabled = true) {
         this.inputString = inputString;
         this.config = DeepCopy(baseConfig);
         this.customRules = [];
@@ -14,6 +14,7 @@ export class BaseConfigBuilder {
         this.userAgent = userAgent;
         this.appliedOverrideKeys = new Set();
         this.groupByCountry = groupByCountry;
+        this.cacheEnabled = cacheEnabled;
     }
 
     async build() {
@@ -87,26 +88,50 @@ export class BaseConfigBuilder {
             }
 
             for (const processedUrl of processedUrls) {
-                const result = await ProxyParser.parse(processedUrl, this.userAgent);
-                if (result && typeof result === 'object' && result.type === 'yamlConfig') {
-                    if (result.config) {
-                        this.applyConfigOverrides(result.config);
+                const result = await ProxyParser.parse(processedUrl, this.userAgent, {
+                    cacheEnabled: this.cacheEnabled
+                });
+                if (result && typeof result === 'object') {
+                    // Handle yamlConfig type
+                    if (result.type === 'yamlConfig') {
+                        if (result.config) {
+                            this.applyConfigOverrides(result.config);
+                        }
+                        if (Array.isArray(result.proxies)) {
+                            result.proxies.forEach(proxy => {
+                                if (proxy && typeof proxy === 'object' && proxy.tag) {
+                                    parsedItems.push(proxy);
+                                }
+                            });
+                        }
+                        continue;
                     }
-                    if (Array.isArray(result.proxies)) {
-                        result.proxies.forEach(proxy => {
-                            if (proxy && typeof proxy === 'object' && proxy.tag) {
-                                parsedItems.push(proxy);
+                    // Handle subscription type (array of lines)
+                    if (result.type === 'subscription' && Array.isArray(result.lines)) {
+                        for (const item of result.lines) {
+                            if (item && typeof item === 'object' && item.tag) {
+                                parsedItems.push(item);
+                            } else if (typeof item === 'string') {
+                                const subResult = await ProxyParser.parse(item, this.userAgent, {
+                                    cacheEnabled: this.cacheEnabled
+                                });
+                                if (subResult) {
+                                    parsedItems.push(subResult);
+                                }
                             }
-                        });
+                        }
+                        continue;
                     }
-                    continue;
                 }
+                // Handle legacy array format (backward compatibility)
                 if (Array.isArray(result)) {
                     for (const item of result) {
                         if (item && typeof item === 'object' && item.tag) {
                             parsedItems.push(item);
                         } else if (typeof item === 'string') {
-                            const subResult = await ProxyParser.parse(item, this.userAgent);
+                            const subResult = await ProxyParser.parse(item, this.userAgent, {
+                                cacheEnabled: this.cacheEnabled
+                            });
                             if (subResult) {
                                 parsedItems.push(subResult);
                             }

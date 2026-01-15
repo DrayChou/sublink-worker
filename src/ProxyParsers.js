@@ -1,4 +1,5 @@
 import { parseServerInfo, parseUrlParams, createTlsConfig, createTransportConfig, decodeBase64, base64ToBinary, DeepCopy, parseBool, parseMaybeNumber, parseArray } from './utils.js';
+import { fetchWithCache } from './cacheManager.js';
 import yaml from 'js-yaml';
 
 // Shared: convert a Clash YAML proxy entry to internal proxy object
@@ -584,19 +585,45 @@ export class ProxyParser {
       
 
       class HttpParser {
-        static async parse(url, userAgent) {
+        static async parse(url, userAgent, options = {}) {
+            const { cacheEnabled = true } = options;
+
             try {
-                let headers = new Headers({
-                  "User-Agent"   : userAgent
-                });
-                const response = await fetch(url, {
-                  method : 'GET',
-                  headers : headers
-                });
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                let text;
+                let fromCache = false;
+                let warning = null;
+
+                if (cacheEnabled) {
+                    // Use cache with retry mechanism
+                    const result = await fetchWithCache(url, {
+                        headers: { "User-Agent": userAgent }
+                    });
+
+                    if (!result.success) {
+                        if (result.warning) {
+                            warning = result.warning;
+                            console.warn(result.warning);
+                        } else {
+                            throw new Error(`Download failed: ${result.error}`);
+                        }
+                    }
+
+                    text = result.content;
+                    fromCache = result.fromCache;
+                } else {
+                    // Direct fetch without cache
+                    const response = await fetch(url, {
+                        method: 'GET',
+                        headers: { "User-Agent": userAgent }
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+
+                    text = await response.text();
                 }
-                const text = await response.text();
+
                 let decodedText;
                 try {
                     decodedText = decodeBase64(text.trim());
@@ -628,7 +655,9 @@ export class ProxyParser {
                             return {
                                 type: 'yamlConfig',
                                 proxies,
-                                config: Object.keys(configOverrides).length > 0 ? configOverrides : null
+                                config: Object.keys(configOverrides).length > 0 ? configOverrides : null,
+                                fromCache,
+                                warning
                             };
                         }
                     }
@@ -637,7 +666,12 @@ export class ProxyParser {
                 }
 
                 // Fallback: treat as subscription lines
-                return decodedText.split('\n').filter(line => line.trim() !== '');
+                return {
+                    type: 'subscription',
+                    lines: decodedText.split('\n').filter(line => line.trim() !== ''),
+                    fromCache,
+                    warning
+                };
             } catch (error) {
                 console.error('Error fetching or parsing HTTP(S) content:', error);
                 return null;

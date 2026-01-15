@@ -3,9 +3,13 @@ import { generateHtml } from './htmlBuilder.js';
 import { ClashConfigBuilder } from './ClashConfigBuilder.js';
 import { SurgeConfigBuilder } from './SurgeConfigBuilder.js';
 import { encodeBase64, GenerateWebPath, tryDecodeSubscriptionLines } from './utils.js';
+import { fetchWithCache, initDatabase, getCacheStats, clearAllCache, generateCacheKey } from './cacheManager.js';
 import { PREDEFINED_RULE_SETS } from './config.js';
 import { t, setLanguage } from './i18n/index.js';
 import yaml from 'js-yaml';
+
+// Initialize D1 database on startup
+const dbInitialized = initDatabase();
 
 addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request))
@@ -16,6 +20,10 @@ async function handleRequest(request) {
     const url = new URL(request.url);
     const lang = url.searchParams.get('lang');
     setLanguage(lang || request.headers.get('accept-language')?.split(',')[0]);
+
+    // Cache enabled parameter (default: true)
+    const cacheEnabled = url.searchParams.get('cache') !== 'false';
+
     if (request.method === 'GET' && url.pathname === '/') {
       // Return the HTML form for GET requests
       return new Response(generateHtml('', '', '', '', url.origin), {
@@ -69,11 +77,11 @@ async function handleRequest(request) {
 
       let configBuilder;
       if (url.pathname.startsWith('/singbox')) {
-        configBuilder = new SingboxConfigBuilder(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry);
+        configBuilder = new SingboxConfigBuilder(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry, cacheEnabled);
       } else if (url.pathname.startsWith('/clash')) {
-        configBuilder = new ClashConfigBuilder(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry);
+        configBuilder = new ClashConfigBuilder(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry, cacheEnabled);
       } else {
-        configBuilder = new SurgeConfigBuilder(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry)
+        configBuilder = new SurgeConfigBuilder(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry, cacheEnabled)
           .setSubscriptionUrl(url.href);
       }
 
@@ -180,16 +188,45 @@ async function handleRequest(request) {
 
         if (trimmedProxy.startsWith('http://') || trimmedProxy.startsWith('https://')) {
           try {
-            const response = await fetch(trimmedProxy, {
-              method: 'GET',
-              headers
-            });
-            const text = await response.text();
-            let processed = tryDecodeSubscriptionLines(text, { decodeUriComponent: true });
-            if (!Array.isArray(processed)) {
-              processed = [processed];
+            // Use cache with retry mechanism (respect cacheEnabled param)
+            const result = cacheEnabled
+              ? await fetchWithCache(trimmedProxy, { headers: { 'User-Agent': userAgent } })
+              : null;
+
+            if (cacheEnabled && result) {
+              if (!result.success) {
+                console.warn(`Failed to fetch ${trimmedProxy}: ${result.error || result.warning}`);
+                if (result.warning) {
+                  console.warn(result.warning);
+                }
+                // Continue with next proxy, don't add empty content
+                continue;
+              }
+              const text = result.content;
+              let processed = tryDecodeSubscriptionLines(text, { decodeUriComponent: true });
+              if (!Array.isArray(processed)) {
+                processed = [processed];
+              }
+              finalProxyList.push(...processed.filter(item => typeof item === 'string' && item.trim() !== ''));
+            } else {
+              // Direct fetch without cache
+              const response = await fetch(trimmedProxy, {
+                method: 'GET',
+                headers
+              });
+
+              if (!response.ok) {
+                console.warn(`Failed to fetch ${trimmedProxy}: HTTP ${response.status}`);
+                continue;
+              }
+
+              const text = await response.text();
+              let processed = tryDecodeSubscriptionLines(text, { decodeUriComponent: true });
+              if (!Array.isArray(processed)) {
+                processed = [processed];
+              }
+              finalProxyList.push(...processed.filter(item => typeof item === 'string' && item.trim() !== ''));
             }
-            finalProxyList.push(...processed.filter(item => typeof item === 'string' && item.trim() !== ''));
           } catch (e) {
             console.warn('Failed to fetch the proxy:', e);
           }
@@ -262,7 +299,7 @@ async function handleRequest(request) {
       try {
         const urlObj = new URL(shortUrl);
         const pathParts = urlObj.pathname.split('/');
-        
+
         if (pathParts.length < 3) {
           return new Response(t('invalidShortUrl'), { status: 400 });
         }
@@ -296,6 +333,24 @@ async function handleRequest(request) {
       } catch (error) {
         return new Response(t('invalidShortUrl'), { status: 400 });
       }
+    } else if (url.pathname === '/cache-stats') {
+      // Cache statistics endpoint
+      const stats = await getCacheStats();
+      return new Response(JSON.stringify({
+        d1Initialized: dbInitialized,
+        ...stats
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } else if (url.pathname === '/cache-clear') {
+      // Clear all cache endpoint
+      const success = await clearAllCache();
+      return new Response(JSON.stringify({
+        success,
+        message: success ? 'All cache cleared' : 'Failed to clear cache'
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
 
     return new Response(t('notFound'), { status: 404 });
