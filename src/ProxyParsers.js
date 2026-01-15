@@ -651,6 +651,20 @@ export class ProxyParser {
                           .map(p => convertYamlProxyToObject(p))
                           .filter(p => p != null);
                         if (proxies.length > 0) {
+                            // Check if this is a full Clash config (has proxy-groups or rules)
+                            const isFullConfig = parsed['proxy-groups'] || parsed['rules'] || parsed['rule-providers'];
+                            if (isFullConfig) {
+                                // Full config detected - only extract proxies, discard groups/rules
+                                console.log(`Detected full Clash config with ${parsed['proxy-groups']?.length || 0} groups, extracting only proxies`);
+                                return {
+                                    type: 'yamlConfig',
+                                    proxies,
+                                    config: null,
+                                    fromCache,
+                                    warning: fromCache ? 'Full Clash config cached, only nodes extracted' : warning
+                                };
+                            }
+                            // Regular subscription - allow config overrides
                             const configOverrides = DeepCopy(parsed);
                             delete configOverrides.proxies;
                             return {
