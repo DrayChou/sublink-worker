@@ -3,11 +3,12 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "deploy": "npm run setup-kv && wrangler deploy",
+    "deploy": "npm run setup-kv && npm run setup-d1 && wrangler deploy",
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "test": "vitest",
-    "setup-kv": "node scripts/setup-kv.js"
+    "setup-kv": "node scripts/setup-kv.js",
+    "setup-d1": "node scripts/setup-d1.js"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.8.0",
