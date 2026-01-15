@@ -71,61 +71,73 @@ jobs:
           echo "Checking for D1 database: $D1_DB_NAME"
 
           # List existing D1 databases
+          echo "Running: wrangler d1 list"
           LIST_OUTPUT=$(wrangler d1 list 2>&1)
-          echo "D1 list output: $LIST_OUTPUT"
+          echo "D1 list output:"
+          echo "$LIST_OUTPUT"
 
-          # Check if our database exists
-          D1_DB_ID=$(echo "$LIST_OUTPUT" | grep "$D1_DB_NAME" | awk '{print $2}')
+          # Try to find database ID using jq
+          if echo "$LIST_OUTPUT" | jq empty 2>/dev/null; then
+            D1_DB_ID=$(echo "$LIST_OUTPUT" | jq -r '.[] | select(.name == "'$D1_DB_NAME'") | .uuid // empty')
+          fi
+
+          # If jq didn't work, try grep
+          if [ -z "$D1_DB_ID" ]; then
+            echo "Trying grep method..."
+            D1_DB_ID=$(echo "$LIST_OUTPUT" | grep "$D1_DB_NAME" | awk '{print $1}')
+          fi
+
+          echo "Found D1_DB_ID: $D1_DB_ID"
 
           if [ -z "$D1_DB_ID" ]; then
               echo "D1 database $D1_DB_NAME does not exist. Creating..."
               CREATE_OUTPUT=$(wrangler d1 create "$D1_DB_NAME" 2>&1)
-              echo "Create D1 output: $CREATE_OUTPUT"
+              echo "Create D1 output:"
+              echo "$CREATE_OUTPUT"
 
-              # Extract the database ID from the output
-              D1_DB_ID=$(echo "$CREATE_OUTPUT" | grep -o '[a-f0-9]\{32\}' | head -1)
+              # Extract the database ID from the output - try multiple patterns
+              D1_DB_ID=$(echo "$CREATE_OUTPUT" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
+              if [ -z "$D1_DB_ID" ]; then
+                D1_DB_ID=$(echo "$CREATE_OUTPUT" | grep -oE '[a-f0-9]{32}' | head -1)
+              fi
 
               if [ -z "$D1_DB_ID" ]; then
-                  echo "Failed to extract D1 ID. Full output: $CREATE_OUTPUT"
-                  echo "Note: D1 database may need to be created in Cloudflare Dashboard"
-                  # Don't fail the build, just warn
+                  echo "Failed to extract D1 ID from create output"
+                  # Don't fail, D1 creation might need manual setup
+                  echo "D1_DB_ID=" >> $GITHUB_ENV
               else
                   echo "D1 database $D1_DB_NAME created successfully with ID: $D1_DB_ID"
+                  echo "D1_DB_ID=$D1_DB_ID" >> $GITHUB_ENV
               fi
           else
               echo "D1 database $D1_DB_NAME already exists with ID: $D1_DB_ID"
-          fi
-
-          # Export D1 database ID for wrangler.toml update
-          if [ -n "$D1_DB_ID" ]; then
               echo "D1_DB_ID=$D1_DB_ID" >> $GITHUB_ENV
           fi
 
       - name: Update wrangler.toml with KV and D1
         run: |
-          # Read the entire content of wrangler.toml
-          WRANGLER_CONTENT=$(cat wrangler.toml)
+          echo "KV_ID from env: $KV_ID"
+          echo "D1_DB_ID from env: $D1_DB_ID"
 
-          # Update the KV namespace ID
-          UPDATED_CONTENT=$(echo "$WRANGLER_CONTENT" | sed 's/id = "[^"]*"/id = "'$KV_ID'"/')
-
-          # Update D1 database ID if available
-          if [ -n "$D1_DB_ID" ]; then
-              UPDATED_CONTENT=$(echo "$UPDATED_CONTENT" | sed 's/database_id = "YOUR_D1_DATABASE_ID_HERE"/database_id = "'$D1_DB_ID'"/')
+          # Update wrangler.toml
+          if [ -n "$KV_ID" ]; then
+            sed -i "s/id = \"[^\"]*\"/id = \"$KV_ID\"/g" wrangler.toml
           fi
 
-          # Write the updated content back to wrangler.toml
-          echo "$UPDATED_CONTENT" > wrangler.toml
+          if [ -n "$D1_DB_ID" ]; then
+            sed -i 's/database_id = "YOUR_D1_DATABASE_ID_HERE"/database_id = "'"$D1_DB_ID"'"/g' wrangler.toml
+          fi
 
           echo "Updated wrangler.toml content:"
           cat wrangler.toml
 
-      - name: Run D1 Migrations (Local First)
+      - name: Apply D1 Migration to Remote
+        if: env.D1_DB_ID != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          # Apply migrations locally first to verify schema
-          if [ -n "$D1_DB_ID" ]; then
-            npx wrangler d1 execute subscription-db --local --file=migrations/0001_create_subscription_cache.sql 2>&1 || echo "Local D1 execute skipped (may need local database)"
-          fi
+          echo "Applying D1 migration..."
+          npx wrangler d1 execute subscription-db --remote --file=migrations/0001_create_subscription_cache.sql --verbose
 
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
