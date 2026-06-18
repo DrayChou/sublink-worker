@@ -116,6 +116,7 @@ export function createApp(bindings = {}) {
                 services.subscriptionCache
             );
             await builder.build();
+            setSubscriptionUserinfoHeader(c, builder.getSubscriptionUserinfo());
             return c.json(builder.config);
         } catch (error) {
             return handleError(c, error, runtime.logger);
@@ -161,9 +162,14 @@ export function createApp(bindings = {}) {
                 services.subscriptionCache
             );
             await builder.build();
-            return c.text(builder.formatConfig(), 200, {
+            const headers = {
                 'Content-Type': 'text/yaml; charset=utf-8'
-            });
+            };
+            const userinfo = builder.getSubscriptionUserinfo();
+            if (userinfo) {
+                headers['subscription-userinfo'] = userinfo;
+            }
+            return c.text(builder.formatConfig(), 200, headers);
         } catch (error) {
             return handleError(c, error, runtime.logger);
         }
@@ -204,7 +210,7 @@ export function createApp(bindings = {}) {
             builder.setSubscriptionUrl(c.req.url);
             await builder.build();
 
-            c.header('subscription-userinfo', 'upload=0; download=0; total=10737418240; expire=2546249531');
+            setSubscriptionUserinfoHeader(c, builder.getSubscriptionUserinfo());
             return c.text(builder.formatConfig());
         } catch (error) {
             return handleError(c, error, runtime.logger);
@@ -262,6 +268,7 @@ export function createApp(bindings = {}) {
 
         const proxylist = inputString.split('\n');
         const finalProxyList = [];
+        let subscriptionUserinfo;
         const userAgent = c.req.query('ua') || getRequestHeader(c.req, 'User-Agent') || DEFAULT_USER_AGENT;
         const headers = { 'User-Agent': userAgent };
         const cacheEnabled = c.req.query('cache') !== 'false';
@@ -274,7 +281,6 @@ export function createApp(bindings = {}) {
             if (trimmedProxy.startsWith('http://') || trimmedProxy.startsWith('https://')) {
                 try {
                     let text;
-                    let fromCache = false;
 
                     if (subscriptionCache && cacheEnabled) {
                         const result = await subscriptionCache.fetchWithCache(trimmedProxy, {
@@ -283,13 +289,19 @@ export function createApp(bindings = {}) {
                         });
                         if (result.success) {
                             text = result.content;
-                            fromCache = result.fromCache;
+                            if (result.subscriptionUserinfo && subscriptionUserinfo === undefined) {
+                                subscriptionUserinfo = result.subscriptionUserinfo;
+                            }
                         } else {
                             runtime.logger.warn('Failed to fetch proxy for xray:', result.error);
                             continue;
                         }
                     } else {
                         const response = await fetch(trimmedProxy, { method: 'GET', headers });
+                        const fetchedUserinfo = response.headers.get('subscription-userinfo');
+                        if (fetchedUserinfo && subscriptionUserinfo === undefined) {
+                            subscriptionUserinfo = fetchedUserinfo;
+                        }
                         text = await response.text();
                     }
 
@@ -311,7 +323,12 @@ export function createApp(bindings = {}) {
             return c.text('Missing config parameter', 400);
         }
 
-        return c.text(encodeBase64(finalString));
+        const responseHeaders = {};
+        if (subscriptionUserinfo) {
+            responseHeaders['subscription-userinfo'] = subscriptionUserinfo;
+        }
+
+        return c.text(encodeBase64(finalString), 200, responseHeaders);
     });
 
     app.get('/shorten-v2', async (c) => {
@@ -499,6 +516,12 @@ function resolveSingboxConfigVersion(requestedVersion, userAgent) {
     }
 
     return '1.12';
+}
+
+function setSubscriptionUserinfoHeader(c, userinfo) {
+    if (userinfo) {
+        c.header('subscription-userinfo', userinfo);
+    }
 }
 
 function getRequestHeader(request, name) {

@@ -51,11 +51,16 @@ const CREATE_TABLE_SQL = `
         cache_key TEXT PRIMARY KEY,
         url TEXT NOT NULL,
         content TEXT NOT NULL,
+        subscription_userinfo TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         success_count INTEGER DEFAULT 1,
         fail_count INTEGER DEFAULT 0
     )
+`;
+
+const ADD_SUBSCRIPTION_USERINFO_COLUMN_SQL = `
+    ALTER TABLE subscription_cache ADD COLUMN subscription_userinfo TEXT
 `;
 
 /**
@@ -83,17 +88,23 @@ export function generateCacheKey(url) {
  * @param {string} url - URL to fetch
  * @param {object} options - Fetch options
  * @param {number} maxRetries - Max retry attempts
- * @returns {Promise<string>} - Response text
+ * @returns {Promise<{content: string, subscriptionUserinfo?: string}>}
  */
 async function fetchWithRetry(url, options = {}, maxRetries = 3) {
     let lastError = null;
+    const {
+        headers: requestHeaders = {},
+        cacheEnabled: _cacheEnabled,
+        maxRetries: _ignoredMaxRetries,
+        ...fetchOptions
+    } = options;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             const uaIndex = (attempt - 1) % USER_AGENTS.length;
             const uaConfig = USER_AGENTS[uaIndex];
 
-            const headers = new Headers(options.headers || {});
+            const headers = new Headers(requestHeaders);
 
             if (!headers.has('user-agent')) {
                 headers.set('user-agent', uaConfig.ua);
@@ -118,11 +129,14 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3) {
             const response = await fetch(url, {
                 method: 'GET',
                 headers,
-                ...options
+                ...fetchOptions
             });
 
             if (response.ok) {
-                return await response.text();
+                return {
+                    content: await response.text(),
+                    subscriptionUserinfo: response.headers.get('subscription-userinfo') || undefined
+                };
             }
 
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -161,6 +175,12 @@ export class SubscriptionCacheService {
             await this.db.exec(CREATE_TABLE_SQL).catch(e => {
                 if (!e.message?.includes('duration')) throw e;
             });
+            await this.db.exec(ADD_SUBSCRIPTION_USERINFO_COLUMN_SQL).catch(e => {
+                const message = e?.message || '';
+                if (!message.includes('duplicate column name') && !message.includes('already exists') && !message.includes('duration')) {
+                    throw e;
+                }
+            });
             this.dbInitialized = true;
             console.log('D1 subscription_cache table initialized');
             return true;
@@ -187,7 +207,7 @@ export class SubscriptionCacheService {
 
         try {
             const result = await this.db.prepare(`
-                SELECT content, success_count, fail_count, created_at
+                SELECT content, subscription_userinfo, success_count, fail_count, created_at
                 FROM subscription_cache
                 WHERE cache_key = ?
             `).bind(cacheKey).first();
@@ -195,6 +215,7 @@ export class SubscriptionCacheService {
             if (result) {
                 return {
                     content: result.content,
+                    subscriptionUserinfo: result.subscription_userinfo || undefined,
                     successCount: result.success_count,
                     failCount: result.fail_count,
                     createdAt: result.created_at
@@ -211,9 +232,10 @@ export class SubscriptionCacheService {
      * @param {string} cacheKey - Cache key
      * @param {string} url - Original URL
      * @param {string} content - Content to cache
+     * @param {string | undefined} subscriptionUserinfo - Upstream subscription metadata header
      * @returns {Promise<boolean>}
      */
-    async saveToCache(cacheKey, url, content) {
+    async saveToCache(cacheKey, url, content, subscriptionUserinfo) {
         if (!this.db) {
             return false;
         }
@@ -223,8 +245,8 @@ export class SubscriptionCacheService {
 
             await this.db.prepare(`
                 INSERT OR REPLACE INTO subscription_cache
-                (cache_key, url, content, created_at, updated_at, success_count, fail_count)
-                VALUES (?, ?, ?, COALESCE(
+                (cache_key, url, content, subscription_userinfo, created_at, updated_at, success_count, fail_count)
+                VALUES (?, ?, ?, ?, COALESCE(
                     (SELECT created_at FROM subscription_cache WHERE cache_key = ?),
                     ?
                 ), ?, COALESCE(
@@ -234,7 +256,7 @@ export class SubscriptionCacheService {
                     (SELECT fail_count FROM subscription_cache WHERE cache_key = ?),
                     0
                 ))
-            `).bind(cacheKey, url, content, cacheKey, now, now, cacheKey, cacheKey).run();
+            `).bind(cacheKey, url, content, subscriptionUserinfo ?? null, cacheKey, now, now, cacheKey, cacheKey).run();
 
             console.log(`Cached ${cacheKey}, url: ${(url || '').substring(0, 50)}...`);
             return true;
@@ -351,8 +373,8 @@ export class SubscriptionCacheService {
         // If cache disabled or no DB, do direct fetch
         if (!cacheEnabled || !this.db) {
             try {
-                const content = await fetchWithRetry(url, options, maxRetries);
-                return { content, fromCache: false, success: true };
+                const result = await fetchWithRetry(url, options, maxRetries);
+                return { ...result, fromCache: false, success: true };
             } catch (error) {
                 return { content: null, fromCache: false, success: false, error: error?.message };
             }
@@ -363,13 +385,13 @@ export class SubscriptionCacheService {
         // Try to fetch fresh content
         try {
             console.log(`Fetching: ${url}`);
-            const content = await fetchWithRetry(url, options, maxRetries);
+            const result = await fetchWithRetry(url, options, maxRetries);
 
             // Success: update cache
-            await this.saveToCache(cacheKey, url, content);
+            await this.saveToCache(cacheKey, url, result.content, result.subscriptionUserinfo);
 
             return {
-                content,
+                ...result,
                 fromCache: false,
                 success: true
             };
@@ -386,6 +408,7 @@ export class SubscriptionCacheService {
                 console.log(`Using cached content for ${cacheKey}`);
                 return {
                     content: cached.content,
+                    subscriptionUserinfo: cached.subscriptionUserinfo,
                     fromCache: true,
                     success: true,
                     warning: 'Remote fetch failed, using cached content'
