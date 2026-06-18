@@ -116,6 +116,15 @@ function detectFormat(content) {
     return 'unknown';
 }
 
+export function isValidSubscriptionPayload(text) {
+    if (typeof text !== 'string') {
+        return false;
+    }
+
+    const content = decodeContent(text);
+    return isPlainSubscriptionContent(content);
+}
+
 /**
  * Fetch subscription content from a URL and parse it
  * @param {string} url - The subscription URL to fetch
@@ -136,7 +145,8 @@ export async function fetchSubscription(url, userAgent, options = {}) {
         if (cacheService && cacheEnabled) {
             const result = await cacheService.fetchWithCache(url, {
                 headers: { 'User-Agent': userAgent },
-                cacheEnabled
+                cacheEnabled,
+                validateFreshContent: isValidSubscriptionPayload
             });
 
             if (!result.success) {
@@ -166,8 +176,11 @@ export async function fetchSubscription(url, userAgent, options = {}) {
             text = await response.text();
         }
 
-        const decodedText = decodeContent(text);
+        if (!isValidSubscriptionPayload(text)) {
+            throw new Error('Downloaded content is not a valid subscription payload');
+        }
 
+        const decodedText = decodeContent(text);
         return parseSubscriptionContent(decodedText);
     } catch (error) {
         console.error('Error fetching or parsing HTTP(S) content:', error);
@@ -196,7 +209,8 @@ export async function fetchSubscriptionWithFormat(url, userAgent, options = {}) 
         if (cacheService && cacheEnabled) {
             const result = await cacheService.fetchWithCache(url, {
                 headers: { 'User-Agent': userAgent },
-                cacheEnabled
+                cacheEnabled,
+                validateFreshContent: isValidSubscriptionPayload
             });
 
             if (!result.success) {
@@ -227,6 +241,10 @@ export async function fetchSubscriptionWithFormat(url, userAgent, options = {}) 
             }
             text = await response.text();
             subscriptionUserinfo = response.headers.get('subscription-userinfo') || undefined;
+        }
+
+        if (!isValidSubscriptionPayload(text)) {
+            throw new Error('Downloaded content is not a valid subscription payload');
         }
 
         const content = decodeContent(text);

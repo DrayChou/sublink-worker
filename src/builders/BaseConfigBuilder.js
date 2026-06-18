@@ -2,9 +2,11 @@ import { ProxyParser } from '../parsers/index.js';
 import { createStableProviderName, deepCopy, tryDecodeSubscriptionLines, decodeBase64 } from '../utils.js';
 import { createTranslator } from '../i18n/index.js';
 import { generateRules, getOutbounds, PREDEFINED_RULE_SETS } from '../config/index.js';
+import { filterNodesByTitle } from '../nodeFilter.js';
+import { InvalidPayloadError } from '../services/errors.js';
 
 export class BaseConfigBuilder {
-    constructor(inputString, baseConfig, lang, userAgent, groupByCountry = false, includeAutoSelect = true, subscriptionCache = null) {
+    constructor(inputString, baseConfig, lang, userAgent, groupByCountry = false, includeAutoSelect = true, nodeFilter = null, subscriptionCache = null) {
         this.inputString = inputString;
         this.config = deepCopy(baseConfig);
         this.customRules = [];
@@ -14,6 +16,7 @@ export class BaseConfigBuilder {
         this.appliedOverrideKeys = new Set();
         this.groupByCountry = groupByCountry;
         this.includeAutoSelect = includeAutoSelect;
+        this.nodeFilter = nodeFilter;
         this.providerUrls = [];  // URLs to use as providers (auto-sync)
         this.subscriptionCache = subscriptionCache;  // D1 subscription cache service
         this.autoProviderDescriptors = undefined;
@@ -22,7 +25,8 @@ export class BaseConfigBuilder {
 
     async build() {
         const customItems = await this.parseCustomItems();
-        this.addCustomItems(customItems);
+        const filteredItems = this.applyNodeFilter(customItems);
+        this.addCustomItems(filteredItems);
         this.addSelectors();
         return this.formatConfig();
     }
@@ -112,8 +116,9 @@ export class BaseConfigBuilder {
                                 this.subscriptionUserinfo = subscriptionUserinfo;
                             }
 
-                            // If format is compatible with target client, use as provider
-                            if (this.isCompatibleProviderFormat(format)) {
+                            // Node filtering needs the concrete node set, so provider passthrough
+                            // must be disabled whenever a filter is active.
+                            if (!this.nodeFilter && this.isCompatibleProviderFormat(format)) {
                                 this.providerUrls.push(originalUrl);
                                 continue;  // Skip parsing, will be used as provider
                             }
@@ -312,6 +317,18 @@ export class BaseConfigBuilder {
 
     getSubscriptionUserinfo() {
         return this.subscriptionUserinfo;
+    }
+
+    applyNodeFilter(items) {
+        if (!this.nodeFilter) {
+            return items;
+        }
+
+        const filteredItems = filterNodesByTitle(items, this.nodeFilter, (item) => item?.tag ?? '');
+        if (items.length > 0 && filteredItems.length === 0) {
+            throw new InvalidPayloadError('Node filter removed all nodes; adjust node_filter_values and try again');
+        }
+        return filteredItems;
     }
 
     getOutboundsList() {

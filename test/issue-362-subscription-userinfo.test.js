@@ -6,6 +6,7 @@ import { decodeBase64 } from '../src/utils.js';
 const subscriptionUserinfo = 'upload=123; download=456; total=1024; expire=1893456000';
 const remoteSubscriptionUrl = 'https://airport.example.com/sub?token=abc';
 const proxyUri = 'ss://YWVzLTEyOC1nY206cGFzcw@example.com:443#Issue362';
+const invalidHtmlPayload = '<html><body>expired <a href="https://example.com/login">login</a></body></html>';
 
 function createTestApp(overrides = {}) {
     return createApp({
@@ -117,5 +118,46 @@ describe('Issue #362 - subscription userinfo passthrough', () => {
         expect(subscriptionCache.fetchWithCache).toHaveBeenCalledTimes(1);
         expect(res.headers.get('subscription-userinfo')).toBe(subscriptionUserinfo);
         expect(decodeBase64(await res.text())).toBe(proxyUri);
+    });
+
+    it('passes semantic validation into cached Xray fetches', async () => {
+        const subscriptionCache = {
+            fetchWithCache: vi.fn(async (_url, options) => {
+                expect(typeof options.validateFreshContent).toBe('function');
+                expect(options.validateFreshContent(proxyUri)).toBe(true);
+                expect(options.validateFreshContent('')).toBe(false);
+                expect(options.validateFreshContent(invalidHtmlPayload)).toBe(false);
+                return {
+                    success: true,
+                    fromCache: true,
+                    content: proxyUri,
+                    subscriptionUserinfo
+                };
+            })
+        };
+        const app = createTestApp({ subscriptionCache });
+
+        const res = await app.request(`http://localhost/xray?config=${encodeURIComponent(remoteSubscriptionUrl)}`);
+
+        expect(res.status).toBe(200);
+        expect(subscriptionCache.fetchWithCache).toHaveBeenCalledTimes(1);
+        expect(decodeBase64(await res.text())).toBe(proxyUri);
+    });
+
+    it('rejects invalid HTML payloads for Xray subscriptions', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => ({
+            ok: true,
+            status: 200,
+            text: async () => invalidHtmlPayload,
+            headers: {
+                get: () => null
+            }
+        })));
+        const app = createTestApp();
+
+        const res = await app.request(`http://localhost/xray?config=${encodeURIComponent(remoteSubscriptionUrl)}`);
+
+        expect(res.status).toBe(400);
+        expect(await res.text()).toBe('Missing config parameter');
     });
 });

@@ -59,6 +59,30 @@ describe('Issues #370/#373/#277 - remote subscription decode and empty Clash out
         expect(result.content).toContain('HK-Plain');
     });
 
+    it('passes semantic validation into cached remote subscription fetches', async () => {
+        const cacheService = {
+            fetchWithCache: vi.fn(async (_url, options) => {
+                expect(typeof options.validateFreshContent).toBe('function');
+                expect(options.validateFreshContent(plainClashYaml)).toBe(true);
+                expect(options.validateFreshContent('')).toBe(false);
+                return {
+                    success: true,
+                    fromCache: true,
+                    content: plainClashYaml,
+                    subscriptionUserinfo: undefined
+                };
+            })
+        };
+
+        const result = await fetchSubscriptionWithFormat('https://example.com/plain-clash.yaml', 'test-agent', {
+            cacheService,
+            cacheEnabled: true
+        });
+
+        expect(result.format).toBe('clash');
+        expect(cacheService.fetchWithCache).toHaveBeenCalledTimes(1);
+    });
+
     it('uses a plain Clash subscription URL as provider instead of emitting empty url-test groups', async () => {
         mockFetchText(plainClashYaml);
 

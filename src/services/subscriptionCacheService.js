@@ -63,6 +63,52 @@ const ADD_SUBSCRIPTION_USERINFO_COLUMN_SQL = `
     ALTER TABLE subscription_cache ADD COLUMN subscription_userinfo TEXT
 `;
 
+function getHeaderValue(headers, name) {
+    if (!headers || !name) {
+        return undefined;
+    }
+
+    if (typeof headers.get === 'function') {
+        return headers.get(name) ?? headers.get(name.toLowerCase()) ?? undefined;
+    }
+
+    if (typeof headers === 'object') {
+        const lowerName = name.toLowerCase();
+        const directMatch = headers[lowerName] ?? headers[name];
+        if (directMatch !== undefined) {
+            return directMatch;
+        }
+
+        const matchedKey = Object.keys(headers).find(key => key.toLowerCase() === lowerName);
+        return matchedKey ? headers[matchedKey] : undefined;
+    }
+
+    return undefined;
+}
+
+export function getCacheUserAgent(options = {}) {
+    const rawUserAgent = getHeaderValue(options.headers, 'user-agent');
+    return typeof rawUserAgent === 'string' ? rawUserAgent.trim().toLowerCase() : '';
+}
+
+export function buildCacheLookupKeys(url, options = {}) {
+    const legacyKey = generateCacheKey(url);
+    const userAgent = getCacheUserAgent(options);
+
+    if (!userAgent) {
+        return {
+            primaryKey: legacyKey,
+            fallbackKeys: [legacyKey]
+        };
+    }
+
+    const primaryKey = generateCacheKey(`${url}\nua:${userAgent}`);
+    return {
+        primaryKey,
+        fallbackKeys: primaryKey === legacyKey ? [primaryKey] : [primaryKey, legacyKey]
+    };
+}
+
 /**
  * Generate cache key for URL using DJB2 hash (32-bit)
  * @param {string} url - URL to generate key for
@@ -96,6 +142,7 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3) {
         headers: requestHeaders = {},
         cacheEnabled: _cacheEnabled,
         maxRetries: _ignoredMaxRetries,
+        validateFreshContent: _ignoredValidateFreshContent,
         ...fetchOptions
     } = options;
 
@@ -156,6 +203,8 @@ export class SubscriptionCacheService {
     constructor(db) {
         this.db = db;
         this.dbInitialized = false;
+        this.initPromise = null;
+        this.inflightRequests = new Map();
     }
 
     /**
@@ -167,32 +216,44 @@ export class SubscriptionCacheService {
             return this.dbInitialized;
         }
 
-        try {
-            if (typeof this.db.exec !== 'function') {
-                console.warn('D1 db.exec is not a function, skipping init');
+        if (this.initPromise) {
+            return this.initPromise;
+        }
+
+        this.initPromise = (async () => {
+            try {
+                if (typeof this.db.exec !== 'function') {
+                    console.warn('D1 db.exec is not a function, skipping init');
+                    return false;
+                }
+                await this.db.exec(CREATE_TABLE_SQL).catch(e => {
+                    if (!e.message?.includes('duration')) throw e;
+                });
+                await this.db.exec(ADD_SUBSCRIPTION_USERINFO_COLUMN_SQL).catch(e => {
+                    const message = e?.message || '';
+                    if (!message.includes('duplicate column name') && !message.includes('already exists') && !message.includes('duration')) {
+                        throw e;
+                    }
+                });
+                this.dbInitialized = true;
+                console.log('D1 subscription_cache table initialized');
+                return true;
+            } catch (error) {
+                if (error.message && error.message.includes('already exists')) {
+                    this.dbInitialized = true;
+                    console.log('D1 table already exists');
+                    return true;
+                }
+                console.warn('Failed to initialize D1 database (non-fatal):', error.message);
                 return false;
             }
-            await this.db.exec(CREATE_TABLE_SQL).catch(e => {
-                if (!e.message?.includes('duration')) throw e;
-            });
-            await this.db.exec(ADD_SUBSCRIPTION_USERINFO_COLUMN_SQL).catch(e => {
-                const message = e?.message || '';
-                if (!message.includes('duplicate column name') && !message.includes('already exists') && !message.includes('duration')) {
-                    throw e;
-                }
-            });
-            this.dbInitialized = true;
-            console.log('D1 subscription_cache table initialized');
-            return true;
-        } catch (error) {
-            if (error.message && error.message.includes('already exists')) {
-                this.dbInitialized = true;
-                console.log('D1 table already exists');
-                return true;
-            }
-            console.warn('Failed to initialize D1 database (non-fatal):', error.message);
-            return false;
+        })();
+
+        const initialized = await this.initPromise;
+        if (!initialized) {
+            this.initPromise = null;
         }
+        return initialized;
     }
 
     /**
@@ -202,6 +263,11 @@ export class SubscriptionCacheService {
      */
     async getCachedContent(cacheKey) {
         if (!this.db) {
+            return null;
+        }
+
+        const initialized = await this.init();
+        if (!initialized) {
             return null;
         }
 
@@ -237,6 +303,11 @@ export class SubscriptionCacheService {
      */
     async saveToCache(cacheKey, url, content, subscriptionUserinfo) {
         if (!this.db) {
+            return false;
+        }
+
+        const initialized = await this.init();
+        if (!initialized) {
             return false;
         }
 
@@ -276,6 +347,11 @@ export class SubscriptionCacheService {
             return false;
         }
 
+        const initialized = await this.init();
+        if (!initialized) {
+            return false;
+        }
+
         try {
             await this.db.prepare(`
                 UPDATE subscription_cache
@@ -299,6 +375,11 @@ export class SubscriptionCacheService {
             return false;
         }
 
+        const initialized = await this.init();
+        if (!initialized) {
+            return false;
+        }
+
         try {
             await this.db.prepare(`
                 DELETE FROM subscription_cache WHERE cache_key = ?
@@ -316,6 +397,11 @@ export class SubscriptionCacheService {
      */
     async getCacheStats() {
         if (!this.db) {
+            return { error: 'D1 database not initialized' };
+        }
+
+        const initialized = await this.init();
+        if (!initialized) {
             return { error: 'D1 database not initialized' };
         }
 
@@ -346,6 +432,11 @@ export class SubscriptionCacheService {
             return false;
         }
 
+        const initialized = await this.init();
+        if (!initialized) {
+            return false;
+        }
+
         try {
             await this.db.prepare(`DELETE FROM subscription_cache`).run();
             console.log('All cache cleared');
@@ -369,6 +460,9 @@ export class SubscriptionCacheService {
     async fetchWithCache(url, options = {}) {
         const cacheEnabled = options.cacheEnabled !== false;
         const maxRetries = options.maxRetries || 3;
+        const validateFreshContent = typeof options.validateFreshContent === 'function'
+            ? options.validateFreshContent
+            : null;
 
         // If cache disabled or no DB, do direct fetch
         if (!cacheEnabled || !this.db) {
@@ -380,49 +474,85 @@ export class SubscriptionCacheService {
             }
         }
 
-        const cacheKey = generateCacheKey(url);
+        const initialized = await this.init();
+        if (!initialized) {
+            try {
+                const result = await fetchWithRetry(url, options, maxRetries);
+                return { ...result, fromCache: false, success: true };
+            } catch (error) {
+                return { content: null, fromCache: false, success: false, error: error?.message };
+            }
+        }
 
-        // Try to fetch fresh content
-        try {
-            console.log(`Fetching: ${url}`);
-            const result = await fetchWithRetry(url, options, maxRetries);
+        const { primaryKey, fallbackKeys } = buildCacheLookupKeys(url, options);
+        if (this.inflightRequests.has(primaryKey)) {
+            return this.inflightRequests.get(primaryKey);
+        }
 
-            // Success: update cache
-            await this.saveToCache(cacheKey, url, result.content, result.subscriptionUserinfo);
+        const task = (async () => {
+            try {
+                console.log(`Fetching: ${url}`);
+                const result = await fetchWithRetry(url, options, maxRetries);
 
-            return {
-                ...result,
-                fromCache: false,
-                success: true
-            };
-        } catch (error) {
-            console.error(`Fetch failed for ${url}:`, error.message);
+                if (validateFreshContent) {
+                    const isValidFreshContent = await validateFreshContent(result.content, {
+                        url,
+                        subscriptionUserinfo: result.subscriptionUserinfo
+                    });
+                    if (!isValidFreshContent) {
+                        throw new Error('Fetched content failed semantic validation');
+                    }
+                }
 
-            // Record failure for stats
-            await this.recordFailAttempt(cacheKey);
+                // Success: update cache
+                await this.saveToCache(primaryKey, url, result.content, result.subscriptionUserinfo);
 
-            // Failure: try to use cached content as fallback
-            const cached = await this.getCachedContent(cacheKey);
-
-            if (cached && cached.content) {
-                console.log(`Using cached content for ${cacheKey}`);
                 return {
-                    content: cached.content,
-                    subscriptionUserinfo: cached.subscriptionUserinfo,
-                    fromCache: true,
-                    success: true,
-                    warning: 'Remote fetch failed, using cached content'
+                    ...result,
+                    fromCache: false,
+                    success: true
+                };
+            } catch (error) {
+                console.error(`Fetch failed for ${url}:`, error.message);
+
+                // Record failure for stats
+                await this.recordFailAttempt(primaryKey);
+
+                // Failure: try cache variants in order (UA-specific first, then legacy URL-only)
+                for (const cacheKey of fallbackKeys) {
+                    const cached = await this.getCachedContent(cacheKey);
+                    if (!cached?.content) {
+                        continue;
+                    }
+
+                    if (cacheKey !== primaryKey) {
+                        await this.saveToCache(primaryKey, url, cached.content, cached.subscriptionUserinfo);
+                    }
+
+                    console.log(`Using cached content for ${cacheKey}`);
+                    return {
+                        content: cached.content,
+                        subscriptionUserinfo: cached.subscriptionUserinfo,
+                        fromCache: true,
+                        success: true,
+                        warning: 'Remote fetch failed, using cached content'
+                    };
+                }
+
+                // No cache available
+                return {
+                    content: null,
+                    fromCache: false,
+                    success: false,
+                    error: error?.message || 'Unknown error'
                 };
             }
+        })().finally(() => {
+            this.inflightRequests.delete(primaryKey);
+        });
 
-            // No cache available
-            return {
-                content: null,
-                fromCache: false,
-                success: false,
-                error: error?.message || 'Unknown error'
-            };
-        }
+        this.inflightRequests.set(primaryKey, task);
+        return task;
     }
 }
 

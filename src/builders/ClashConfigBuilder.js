@@ -48,11 +48,11 @@ function getClashUdpValue(proxy, defaultEnabled = true) {
 }
 
 export class ClashConfigBuilder extends BaseConfigBuilder {
-    constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, includeAutoSelect = true, subscriptionCache = null) {
+    constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, includeAutoSelect = true, nodeFilter = null, subscriptionCache = null) {
         if (!baseConfig) {
             baseConfig = CLASH_CONFIG;
         }
-        super(inputString, baseConfig, lang, userAgent, groupByCountry, includeAutoSelect, subscriptionCache);
+        super(inputString, baseConfig, lang, userAgent, groupByCountry, includeAutoSelect, nodeFilter, subscriptionCache);
         this.selectedRules = selectedRules;
         this.customRules = customRules;
         this.countryGroupNames = [];

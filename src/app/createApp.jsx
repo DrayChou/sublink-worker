@@ -14,11 +14,13 @@ import { encodeBase64, tryDecodeSubscriptionLines } from '../utils.js';
 import { APP_NAME, APP_SUBTITLE } from '../constants.js';
 import { ShortLinkService } from '../services/shortLinkService.js';
 import { ConfigStorageService } from '../services/configStorageService.js';
-import { ServiceError, MissingDependencyError } from '../services/errors.js';
+import { ServiceError, MissingDependencyError, InvalidPayloadError } from '../services/errors.js';
 import { normalizeRuntime } from '../runtime/runtimeConfig.js';
 import { PREDEFINED_RULE_SETS, SING_BOX_CONFIG, SING_BOX_CONFIG_V1_11, generateSubconverterConfig } from '../config/index.js';
+import { parseNodeFilter } from '../nodeFilter.js';
 
 const DEFAULT_USER_AGENT = 'curl/7.74.0';
+const XRAY_PROXY_URI_PATTERN = /^(ss|vmess|vless|hysteria|hysteria2|hy2|trojan|tuic|anytls):\/\//i;
 
 export function createApp(bindings = {}) {
     const runtime = normalizeRuntime(bindings);
@@ -86,6 +88,7 @@ export function createApp(bindings = {}) {
             const externalUiDownloadUrl = c.req.query('external_ui_download_url');
             const configId = c.req.query('configId');
             const lang = c.get('lang');
+            const nodeFilter = parseRequestNodeFilter(c.req);
 
             const requestedSingboxVersion = c.req.query('singbox_version') || c.req.query('sb_version') || c.req.query('sb_ver');
             const requestUserAgent = getRequestHeader(c.req, 'User-Agent');
@@ -113,6 +116,7 @@ export function createApp(bindings = {}) {
                 externalUiDownloadUrl,
                 singboxConfigVersion,
                 includeAutoSelect,
+                nodeFilter,
                 services.subscriptionCache
             );
             await builder.build();
@@ -140,6 +144,7 @@ export function createApp(bindings = {}) {
             const externalUiDownloadUrl = c.req.query('external_ui_download_url');
             const configId = c.req.query('configId');
             const lang = c.get('lang');
+            const nodeFilter = parseRequestNodeFilter(c.req);
 
             let baseConfig;
             if (configId) {
@@ -159,6 +164,7 @@ export function createApp(bindings = {}) {
                 externalController,
                 externalUiDownloadUrl,
                 includeAutoSelect,
+                nodeFilter,
                 services.subscriptionCache
             );
             await builder.build();
@@ -189,6 +195,7 @@ export function createApp(bindings = {}) {
             const includeAutoSelect = c.req.query('include_auto_select') !== 'false';
             const configId = c.req.query('configId');
             const lang = c.get('lang');
+            const nodeFilter = parseRequestNodeFilter(c.req);
 
             let baseConfig;
             if (configId) {
@@ -205,6 +212,7 @@ export function createApp(bindings = {}) {
                 ua,
                 groupByCountry,
                 includeAutoSelect,
+                nodeFilter,
                 services.subscriptionCache
             );
             builder.setSubscriptionUrl(c.req.url);
@@ -285,7 +293,8 @@ export function createApp(bindings = {}) {
                     if (subscriptionCache && cacheEnabled) {
                         const result = await subscriptionCache.fetchWithCache(trimmedProxy, {
                             headers,
-                            cacheEnabled
+                            cacheEnabled,
+                            validateFreshContent: isValidXraySubscriptionContent
                         });
                         if (result.success) {
                             text = result.content;
@@ -303,6 +312,11 @@ export function createApp(bindings = {}) {
                             subscriptionUserinfo = fetchedUserinfo;
                         }
                         text = await response.text();
+                    }
+
+                    if (!isValidXraySubscriptionContent(text)) {
+                        runtime.logger.warn('Fetched xray subscription content is invalid');
+                        continue;
                     }
 
                     let processed = tryDecodeSubscriptionLines(text, { decodeUriComponent: true });
@@ -464,6 +478,32 @@ function parseJsonArray(raw) {
 
 function parseBooleanFlag(value) {
     return value === 'true' || value === true;
+}
+
+function parseRequestNodeFilter(request) {
+    try {
+        return parseNodeFilter(
+            request.query('node_filter_mode'),
+            request.query('node_filter_type'),
+            request.query('node_filter_values')
+        );
+    } catch (error) {
+        if (error instanceof InvalidPayloadError) {
+            throw error;
+        }
+        throw new InvalidPayloadError(error?.message || 'Invalid node filter');
+    }
+}
+
+function isValidXraySubscriptionContent(text) {
+    const processed = tryDecodeSubscriptionLines(text, { decodeUriComponent: true });
+    const items = Array.isArray(processed) ? processed : [processed];
+    const normalizedItems = items
+        .filter(item => typeof item === 'string')
+        .map(item => item.trim())
+        .filter(Boolean);
+
+    return normalizedItems.length > 0 && normalizedItems.every(item => XRAY_PROXY_URI_PATTERN.test(item));
 }
 
 function parseSemverLike(value) {
