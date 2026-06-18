@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app/createApp.jsx';
 import { MemoryKVAdapter } from '../src/adapters/kv/memoryKv.js';
 import { decodeBase64 } from '../src/utils.js';
+import { parseNodeFilter } from '../src/nodeFilter.js';
 
 const SS_AUTH = 'YWVzLTEyOC1nY206cGFzcw';
 const JP_URL = `ss://${SS_AUTH}@jp.example.com:443#日本-01`;
@@ -28,6 +29,17 @@ afterEach(() => {
 });
 
 describe('Node title filter', () => {
+    it('parses punctuation and whitespace separated filter values', () => {
+        const punctuationFilter = parseNodeFilter('exclude', 'keyword', '香港，hk；🇭🇰|台湾、美国');
+        expect(punctuationFilter.values).toEqual(['香港', 'hk', '🇭🇰', '台湾', '美国']);
+
+        const whitespaceFilter = parseNodeFilter('exclude', 'keyword', '香港 hk 🇭🇰');
+        expect(whitespaceFilter.values).toEqual(['香港', 'hk', '🇭🇰']);
+
+        const quotedFilter = parseNodeFilter('exclude', 'keyword', '"Hong Kong" "United States"');
+        expect(quotedFilter.values).toEqual(['Hong Kong', 'United States']);
+    });
+
     it('includes only matching nodes for singbox keyword filters', async () => {
         const app = createTestApp();
         const values = JSON.stringify(['日本', '美国']);
@@ -126,5 +138,29 @@ describe('Node title filter', () => {
         const text = await res.text();
         expect(text).toContain('JP-Node');
         expect(text).not.toContain('HK-Node');
+    });
+
+    it('drops imported empty url-test groups after node filtering', async () => {
+        const remoteSubscriptionUrl = 'https://airport.example.com/with-groups';
+        const remoteClashConfig = `proxies:\n  - name: 悦·🇭🇰香港1\n    type: ss\n    server: hk.example.com\n    port: 443\n    cipher: aes-128-gcm\n    password: test\n  - name: 悦·🇺🇸美国1\n    type: ss\n    server: us.example.com\n    port: 443\n    cipher: aes-128-gcm\n    password: test\nproxy-groups:\n  - name: 悦 · 🇭🇰 香港聚合\n    type: url-test\n    proxies:\n      - 悦·🇭🇰香港1\n  - name: 总选择\n    type: select\n    proxies:\n      - 悦 · 🇭🇰 香港聚合\n      - 悦·🇺🇸美国1\n`;
+
+        vi.stubGlobal('fetch', vi.fn(async () => ({
+            ok: true,
+            status: 200,
+            text: async () => remoteClashConfig,
+            headers: { get: () => null }
+        })));
+
+        const app = createTestApp();
+        const values = JSON.stringify(['香港', 'hk', '🇭🇰']);
+        const res = await app.request(
+            `http://localhost/clash?config=${encodeURIComponent(remoteSubscriptionUrl)}&node_filter_mode=exclude&node_filter_type=keyword&node_filter_values=${encodeURIComponent(values)}`
+        );
+
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        expect(text).toContain('悦·🇺🇸美国1');
+        expect(text).not.toContain('悦·🇭🇰香港1');
+        expect(text).not.toContain('悦 · 🇭🇰 香港聚合');
     });
 });

@@ -47,6 +47,26 @@ function getClashUdpValue(proxy, defaultEnabled = true) {
     return defaultEnabled;
 }
 
+function requiresProxyGroupMembers(group) {
+    return group?.type === 'url-test' || group?.type === 'fallback';
+}
+
+function hasAnyProxyGroupMembers(group) {
+    const hasProxyRefs = Array.isArray(group?.proxies) && group.proxies.length > 0;
+    const hasProviderRefs = Array.isArray(group?.use) && group.use.length > 0;
+    return hasProxyRefs || hasProviderRefs;
+}
+
+function shouldKeepProxyGroup(group) {
+    if (!group?.type) {
+        return false;
+    }
+    if (!requiresProxyGroupMembers(group)) {
+        return true;
+    }
+    return hasAnyProxyGroupMembers(group);
+}
+
 export class ClashConfigBuilder extends BaseConfigBuilder {
     constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, includeAutoSelect = true, nodeFilter = null, subscriptionCache = null) {
         if (!baseConfig) {
@@ -591,6 +611,10 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
                 if (userGroup.url) existing.url = userGroup.url;
                 if (typeof userGroup.interval === 'number') existing.interval = userGroup.interval;
                 if (typeof userGroup.lazy === 'boolean') existing.lazy = userGroup.lazy;
+
+                if (this.nodeFilter && !shouldKeepProxyGroup(existing)) {
+                    this.config['proxy-groups'].splice(existingIndex, 1);
+                }
             } else {
                 // New user-defined group - validate and add
                 const newGroup = { ...userGroup };
@@ -605,7 +629,11 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
                     newGroup.use = newGroup.use.filter(p => allProviderNames.has(p));
                 }
 
-                if ((newGroup.proxies?.length > 0) || (newGroup.use?.length > 0) || newGroup.type) {
+                if (this.nodeFilter) {
+                    if (shouldKeepProxyGroup(newGroup)) {
+                        this.config['proxy-groups'].push(newGroup);
+                    }
+                } else if ((newGroup.proxies?.length > 0) || (newGroup.use?.length > 0) || newGroup.type) {
                     this.config['proxy-groups'].push(newGroup);
                 }
             }
@@ -619,14 +647,12 @@ export class ClashConfigBuilder extends BaseConfigBuilder {
      */
     validateProxyGroups() {
         (this.config['proxy-groups'] || []).forEach(group => {
-            const requiresMembers = group?.type === 'url-test' || group?.type === 'fallback';
+            const requiresMembers = requiresProxyGroupMembers(group);
             if (!requiresMembers) {
                 return;
             }
 
-            const hasProxyRefs = Array.isArray(group.proxies) && group.proxies.length > 0;
-            const hasProviderRefs = Array.isArray(group.use) && group.use.length > 0;
-            if (hasProxyRefs || hasProviderRefs) {
+            if (hasAnyProxyGroupMembers(group)) {
                 return;
             }
 

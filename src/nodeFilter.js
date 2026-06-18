@@ -30,10 +30,25 @@ function normalizeFilterValues(values) {
         // Fallback to delimited string parsing for URL-friendly query params.
     }
 
-    return trimmed
-        .split(/[\n,]+/)
-        .map(value => value.trim())
-        .filter(Boolean);
+    const explicitDelimiterPattern = /[\r\n,，、;；|\t]/;
+    if (explicitDelimiterPattern.test(trimmed)) {
+        return trimmed
+            .split(/[\r\n,，、;；|\t]+/)
+            .map(value => value.trim())
+            .filter(Boolean);
+    }
+
+    const valuesWithWhitespace = [];
+    const tokenPattern = /"([^"]+)"|'([^']+)'|(\S+)/g;
+    let match;
+    while ((match = tokenPattern.exec(trimmed)) !== null) {
+        const value = (match[1] ?? match[2] ?? match[3] ?? '').trim();
+        if (value) {
+            valuesWithWhitespace.push(value);
+        }
+    }
+
+    return valuesWithWhitespace;
 }
 
 export function parseNodeFilter(rawMode, rawType, rawValues) {
