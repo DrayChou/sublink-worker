@@ -11,6 +11,8 @@ import { ClashConfigBuilder } from '../builders/ClashConfigBuilder.js';
 import { SurgeConfigBuilder } from '../builders/SurgeConfigBuilder.js';
 import { createTranslator, resolveLanguage } from '../i18n/index.js';
 import { encodeBase64, tryDecodeSubscriptionLines } from '../utils.js';
+import { ProxyParser } from '../parsers/index.js';
+import { filterNodesByTitle } from '../nodeFilter.js';
 import { APP_NAME, APP_SUBTITLE } from '../constants.js';
 import { ShortLinkService } from '../services/shortLinkService.js';
 import { ConfigStorageService } from '../services/configStorageService.js';
@@ -276,6 +278,7 @@ export function createApp(bindings = {}) {
 
         const proxylist = inputString.split('\n');
         const finalProxyList = [];
+        const nodeFilter = parseRequestNodeFilter(c.req);
         let subscriptionUserinfo;
         const userAgent = c.req.query('ua') || getRequestHeader(c.req, 'User-Agent') || DEFAULT_USER_AGENT;
         const headers = { 'User-Agent': userAgent };
@@ -321,14 +324,16 @@ export function createApp(bindings = {}) {
 
                     let processed = tryDecodeSubscriptionLines(text, { decodeUriComponent: true });
                     if (!Array.isArray(processed)) processed = [processed];
-                    finalProxyList.push(...processed.filter(item => typeof item === 'string' && item.trim() !== ''));
+                    const filteredLines = await filterXraySubscriptionLines(processed, userAgent, nodeFilter);
+                    finalProxyList.push(...filteredLines);
                 } catch (e) {
                     runtime.logger.warn('Failed to fetch the proxy', e);
                 }
             } else {
                 let processed = tryDecodeSubscriptionLines(trimmedProxy);
                 if (!Array.isArray(processed)) processed = [processed];
-                finalProxyList.push(...processed.filter(item => typeof item === 'string' && item.trim() !== ''));
+                const filteredLines = await filterXraySubscriptionLines(processed, userAgent, nodeFilter);
+                finalProxyList.push(...filteredLines);
             }
         }
 
@@ -504,6 +509,25 @@ function isValidXraySubscriptionContent(text) {
         .filter(Boolean);
 
     return normalizedItems.length > 0 && normalizedItems.every(item => XRAY_PROXY_URI_PATTERN.test(item));
+}
+
+async function filterXraySubscriptionLines(items, userAgent, nodeFilter) {
+    const normalizedItems = items
+        .filter(item => typeof item === 'string')
+        .map(item => item.trim())
+        .filter(item => item !== '');
+
+    if (!nodeFilter) {
+        return normalizedItems;
+    }
+
+    const taggedItems = await Promise.all(normalizedItems.map(async (item) => ({
+        raw: item,
+        parsed: await ProxyParser.parse(item, userAgent)
+    })));
+
+    return filterNodesByTitle(taggedItems, nodeFilter, (item) => item?.parsed?.tag ?? '')
+        .map(item => item.raw);
 }
 
 function parseSemverLike(value) {

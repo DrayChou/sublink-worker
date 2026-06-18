@@ -13,5 +13,20 @@ binding = "SUBSCRIPTION_DB"
 database_name = "subscription-db"
 database_id = "3292c97a-9d2f-40a3-bad9-cab00b460061"
 
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
+
 [assets]
 directory = "./public"

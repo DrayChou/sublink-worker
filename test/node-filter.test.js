@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app/createApp.jsx';
 import { MemoryKVAdapter } from '../src/adapters/kv/memoryKv.js';
+import { decodeBase64 } from '../src/utils.js';
 
 const SS_AUTH = 'YWVzLTEyOC1nY206cGFzcw';
 const JP_URL = `ss://${SS_AUTH}@jp.example.com:443#日本-01`;
@@ -67,6 +68,20 @@ describe('Node title filter', () => {
         expect(text).toContain('日本-01');
         expect(text).toContain('美国-01');
         expect(text).not.toContain('香港-01');
+    });
+
+    it('filters Xray subscription output by node title', async () => {
+        const app = createTestApp();
+        const values = JSON.stringify(['日本', '美国']);
+        const res = await app.request(
+            `http://localhost/xray?config=${encodeURIComponent(INPUT)}&node_filter_mode=include&node_filter_type=keyword&node_filter_values=${encodeURIComponent(values)}`
+        );
+
+        expect(res.status).toBe(200);
+        const decoded = decodeBase64(await res.text());
+        expect(decoded).toContain('日本-01');
+        expect(decoded).toContain('美国-01');
+        expect(decoded).not.toContain('香港-01');
     });
 
     it('returns 400 for invalid regex filters', async () => {
